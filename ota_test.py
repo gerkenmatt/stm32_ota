@@ -10,16 +10,23 @@ BAUDRATE = 115200
 SOF  = 0xAA
 EOF  = 0xBB
 
-PACKET_CMD    = 0x00
-PACKET_DATA   = 0x01
+PACKET_CMD    = 0x01
 PACKET_HEADER = 0x02
-PACKET_RESP   = 0x03
+PACKET_DATA   = 0x03
+PACKET_RESP   = 0x04
 
 CMD_START = 0xA0
 CMD_END   = 0xA1
 
 CHUNK_SIZE = 128
 
+RED = "\033[91m"
+GREEN = "\033[92m"
+YELLOW = "\033[93m"
+BLUE = "\033[94m"
+RESET = "\033[0m"
+
+ser_lock = threading.Lock()
 
 def crc32(data):
     return 0
@@ -34,6 +41,27 @@ def build_frame(packet_type, payload: bytes) -> bytes:
     frame += struct.pack('<I', crc32(payload))
     frame.append(EOF)
     return frame
+
+def wait_for_ack(ser, timeout=2.0) -> bool:
+    start = time.time()
+    buffer = bytearray()
+
+    while time.time() - start < timeout:
+        with ser_lock:
+            byte = ser.read()
+        if byte:
+            print(f"Received byte: 0x{byte[0]:02X}")  # Debug print
+            buffer.append(byte[0])
+
+            if len(buffer) >= 10 and buffer[0] == SOF and buffer[1] == PACKET_RESP:
+                status = buffer[4]
+                print(f"Full frame received, status: 0x{status:02X}")
+                return status == RESP_ACK
+
+    print("Timeout: No valid ACK received")
+    return False
+
+
 
 def send_cmd(ser, cmd_id):
     payload = bytes([cmd_id])
@@ -50,7 +78,12 @@ def send_data_chunks(ser, fw_data):
         chunk = fw_data[i:i+CHUNK_SIZE]
         frame = build_frame(PACKET_DATA, chunk)
         ser.write(frame)
-        time.sleep(0.01)
+
+        if not wait_for_ack(ser):
+            print(RED + f"\nError: No ACK for chunk {i // CHUNK_SIZE}" + RESET)
+            return False
+        print(".", end="", flush=True)
+    return True
 
 def send_ota_sequence(ser, filepath):
     try:
@@ -75,7 +108,9 @@ def send_ota_sequence(ser, filepath):
     time.sleep(0.1)
 
     print("Sending firmware data...")
-    send_data_chunks(ser, fw_data)
+    if not send_data_chunks(ser, fw_data):
+        print(RED + "\nAborting OTA update due to NACK or timeout." + RESET)
+        return
 
     print("Sending OTA_END")
     send_cmd(ser, CMD_END)
@@ -83,10 +118,10 @@ def send_ota_sequence(ser, filepath):
 def read_from_uart(ser):
     while True:
         try:
-            line = ser.readline()
+            with ser_lock:
+                line = ser.readline()
             if line:
-                print(line.decode(errors='ignore').strip())
-
+                print("    " + GREEN + line.decode(errors='ignore').strip() + RESET)
         except:
             continue
 
@@ -99,7 +134,7 @@ def main():
 
         while True:
             try:
-                cmd = input("> ").strip()
+                cmd = input().strip()
                 if not cmd:
                     continue
                 if cmd == "send":
