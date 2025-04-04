@@ -69,9 +69,9 @@ def wait_for_ack(ser, timeout=ACK_TIMEOUT) -> bool:
                 if status == RESP_ACK:
                     print(BLUE + "  --> ACK received" + RESET)
                     return True
-                else:
+                elif status == RESP_NACK:
                     uart_reading_enabled.set()
-                    print(RED + f"  --> NACK or unexpected response. Full buffer: {buffer.hex()}" + RESET)
+                    print(RED + f"  --> NACK received" + RESET)
                     return False
 
     if buffer:
@@ -114,7 +114,7 @@ def send_data_chunks(ser, fw_data):
         ser.write(build_frame(PACKET_DATA, chunk))
 
         if not wait_for_ack(ser):
-            print(RED + f"\nError: No ACK for chunk {i // CHUNK_SIZE}" + RESET)
+            print(RED + f"  --> No ACK for chunk {i // CHUNK_SIZE}" + RESET)
             return False
     return True
 
@@ -137,19 +137,16 @@ def send_ota_sequence(ser, filepath):
 
     print("Sending OTA_START")
     if not send_cmd(ser, CMD_START):
-        print(RED + "\nAborting OTA update due to no ACK after OTA_START." + RESET)
         uart_reading_enabled.set()
         return
 
     print("Sending header")
     if not send_header(ser, fw_size, fw_crc32):
-        print(RED + "\nAborting OTA update due to no ACK after header." + RESET)
         uart_reading_enabled.set()
         return
 
     print("Sending firmware data...")
     if not send_data_chunks(ser, fw_data):
-        print(RED + "\nAborting OTA update due to error." + RESET)
         uart_reading_enabled.set()
         return
 
