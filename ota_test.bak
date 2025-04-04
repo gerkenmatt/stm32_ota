@@ -9,12 +9,12 @@ from threading import Event
 SERIAL_PORT = '/dev/ttyACM0'
 BAUDRATE = 115200
 CHUNK_SIZE = 128
-ACK_TIMEOUT = 2.0
+ACK_TIMEOUT = 4.0
 USE_CRC32 = False  # Set to True to enable real CRC32
 
 # === Protocol Constants ===
-SOF  = 0xA5
-EOF  = 0xB6
+SOF  = 0xAA
+EOF  = 0xBB
 
 PACKET_CMD    = 0x01
 PACKET_HEADER = 0x02
@@ -61,25 +61,19 @@ def wait_for_ack(ser, timeout=ACK_TIMEOUT) -> bool:
 
     while time.time() - start < timeout:
         with ser_lock:
-            data = ser.read(10 - len(buffer))  # Read as many bytes as needed
-        if data:
-            buffer.extend(data)
+            byte = ser.read()
+        if byte:
+            buffer.append(byte[0])
             if len(buffer) >= 10 and buffer[0] == SOF and buffer[1] == PACKET_RESP:
                 status = buffer[4]
                 if status == RESP_ACK:
                     print(BLUE + "  --> ACK received" + RESET)
-                    return True
-                else:
-                    uart_reading_enabled.set()
-                    print(RED + f"  --> NACK or unexpected response. Full buffer: {buffer.hex()}" + RESET)
-                    return False
+                else: 
+                    print(RED + "   --> NACK received" + RESET)
+                return status == RESP_ACK
 
-    if buffer:
-        print(YELLOW + f"Partial/invalid data before timeout. Full buffer: {buffer.hex()}" + RESET)
     print(RED + "Timeout: No valid ACK received" + RESET)
     return False
-
-
 
 def read_from_uart(ser):
     while True:
@@ -93,29 +87,38 @@ def read_from_uart(ser):
             continue
 
 # === OTA Logic ===
-def send_cmd(ser, cmd_id, wait=True):
+def send_cmd(ser, cmd_id):
     ser.write(build_frame(PACKET_CMD, bytes([cmd_id])))
-    if wait: 
-        return wait_for_ack(ser)
-    else: 
-        return True
+
+    if not wait_for_ack(ser):
+        print(RED + f"\nError: No ACK for CMD_START" + RESET)
+        return False
+    # time.sleep(3)
+    return True
 
 def send_header(ser, fw_size, fw_crc32, version=0):
     payload = struct.pack('<III', fw_size, fw_crc32, version) + b'\x00' * 4
-    ser.reset_input_buffer()  # Clear UART buffer before waiting for ACK
+    ser.reset_input_buffer()  # Clear residual data
     ser.write(build_frame(PACKET_HEADER, payload))
-    return wait_for_ack(ser)
+
+    if not wait_for_ack(ser):
+        print(RED + f"\nError: No ACK for OTA HEADER" + RESET)
+        return False
+    return True
+
 
 
 def send_data_chunks(ser, fw_data):
     for i in range(0, len(fw_data), CHUNK_SIZE):
-        print("sending chunk " + str(i))
+        print("sending chunk " + str(i/CHUNK_SIZE) + " of " + str(len(fw_data)/CHUNK_SIZE))
         chunk = fw_data[i:i+CHUNK_SIZE]
         ser.write(build_frame(PACKET_DATA, chunk))
+        # time.sleep(2)
 
         if not wait_for_ack(ser):
             print(RED + f"\nError: No ACK for chunk {i // CHUNK_SIZE}" + RESET)
             return False
+    time.sleep(2)
     return True
 
 def send_ota_sequence(ser, filepath):
@@ -132,33 +135,35 @@ def send_ota_sequence(ser, filepath):
     print(f"Firmware size: {fw_size} bytes")
     print(f"CRC32: 0x{fw_crc32:08X}")
 
-    # Disable UART reading when the OTA sequence is being sent
-    uart_reading_enabled.clear()
-
     print("Sending OTA_START")
-    if not send_cmd(ser, CMD_START):
-        print(RED + "\nAborting OTA update due to no ACK after OTA_START." + RESET)
+    uart_reading_enabled.clear()
+    if not send_cmd(ser, CMD_START): 
+        print(RED + "\nAborting OTA update due to error." + RESET)
         uart_reading_enabled.set()
         return
+    # uart_reading_enabled.set()
+    # time.sleep(4)
 
     print("Sending header")
+    # uart_reading_enabled.set()
     if not send_header(ser, fw_size, fw_crc32):
-        print(RED + "\nAborting OTA update due to no ACK after header." + RESET)
+        print(RED + "\nAborting OTA update due to error." + RESET)
         uart_reading_enabled.set()
         return
+    # uart_reading_enabled.clear()
+    # time.sleep(3)
 
     print("Sending firmware data...")
+    # uart_reading_enabled.clear()
     if not send_data_chunks(ser, fw_data):
         print(RED + "\nAborting OTA update due to error." + RESET)
         uart_reading_enabled.set()
         return
-
-    # Re-enable UART reading at the end of the OTA sequence
     uart_reading_enabled.set()
 
     print("Sending OTA_END")
-    send_cmd(ser, CMD_END, False)
-
+    send_cmd(ser, CMD_END)
+    print("Done...")
 
 # === Main Interface ===
 def main():
