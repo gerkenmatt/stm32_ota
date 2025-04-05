@@ -10,7 +10,7 @@ SERIAL_PORT = '/dev/ttyACM0'
 BAUDRATE = 115200
 CHUNK_SIZE = 128
 ACK_TIMEOUT = 2.0
-USE_CRC32 = False  # Set to True to enable real CRC32
+USE_CRC32 = True # Set to True to enable real CRC32
 
 # === Protocol Constants ===
 SOF  = 0xA5
