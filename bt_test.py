@@ -84,13 +84,15 @@ def wait_for_ack(ser, timeout=ACK_TIMEOUT) -> bool:
 
 def read_from_stm32(ser_stm32):
     while True:
+        uart_reading_enabled.wait()
         try:
-            if ser_stm32.in_waiting:
-                data = ser_stm32.read(ser_stm32.in_waiting).decode(errors="ignore")
-                print(data, end="")  # avoid double newlines
-        except Exception as e:
-            print(f"[Error] {e}")
-            break
+            with ser_lock:
+                line = ser_stm32.readline()
+            if line:
+                print("    " + GREEN + line.decode(errors='ignore').strip() + RESET)
+        except:
+            continue
+
 
 # === OTA Logic ===
 def send_cmd(ser, cmd_id, wait=True):
