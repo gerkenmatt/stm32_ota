@@ -93,34 +93,33 @@ def read_from_stm32(ser_stm32):
         except:
             continue
 
-
 # === OTA Logic ===
-def send_cmd(ser, cmd_id, wait=True):
-    ser.write(build_frame(PACKET_CMD, bytes([cmd_id])))
+def send_cmd(ser_tx, ser_rx, cmd_id, wait=True):
+    ser_tx.write(build_frame(PACKET_CMD, bytes([cmd_id])))
     if wait: 
-        return wait_for_ack(ser)
+        return wait_for_ack(ser_rx)
     else: 
         return True
 
-def send_header(ser, fw_size, fw_crc32, version=0):
+def send_header(ser_tx, ser_rx, fw_size, fw_crc32, version=0):
     payload = struct.pack('<III', fw_size, fw_crc32, version) + b'\x00' * 4
-    ser.reset_input_buffer()  # Clear UART buffer before waiting for ACK
-    ser.write(build_frame(PACKET_HEADER, payload))
-    return wait_for_ack(ser)
+    ser_rx.reset_input_buffer()  # Clear STM32 UART buffer before waiting for ACK
+    ser_tx.write(build_frame(PACKET_HEADER, payload))
+    return wait_for_ack(ser_rx)
 
 
-def send_data_chunks(ser, fw_data):
+def send_data_chunks(ser_tx, ser_rx, fw_data):
     for i in range(0, len(fw_data), CHUNK_SIZE):
         print("sending chunk " + str(i))
         chunk = fw_data[i:i+CHUNK_SIZE]
-        ser.write(build_frame(PACKET_DATA, chunk))
+        ser_tx.write(build_frame(PACKET_DATA, chunk))
 
-        if not wait_for_ack(ser):
+        if not wait_for_ack(ser_rx):
             print(RED + f"  --> No ACK for chunk {i // CHUNK_SIZE}" + RESET)
             return False
     return True
 
-def send_ota_sequence(ser, filepath):
+def send_ota_sequence(ser_tx, ser_rx, filepath):
     try:
         with open(filepath, 'rb') as f:
             fw_data = f.read()
@@ -137,26 +136,27 @@ def send_ota_sequence(ser, filepath):
     # Disable UART reading when the OTA sequence is being sent
     uart_reading_enabled.clear()
 
+    # uart_reading_enabled.set()
+
     print("Sending OTA_START")
-    if not send_cmd(ser, CMD_START):
+    if not send_cmd(ser_tx, ser_rx, CMD_START):
         uart_reading_enabled.set()
         return
 
     print("Sending header")
-    if not send_header(ser, fw_size, fw_crc32):
+    if not send_header(ser_tx, ser_rx, fw_size, fw_crc32):
         uart_reading_enabled.set()
         return
 
     print("Sending firmware data...")
-    if not send_data_chunks(ser, fw_data):
+    if not send_data_chunks(ser_tx, ser_rx, fw_data):
         uart_reading_enabled.set()
         return
 
-    # Re-enable UART reading at the end of the OTA sequence
     uart_reading_enabled.set()
 
     print("Sending OTA_END")
-    send_cmd(ser, CMD_END, False)
+    send_cmd(ser_tx, ser_rx, CMD_END, wait=False)
 
 
 # === Main Interface ===
@@ -177,7 +177,7 @@ def main():
                             continue
                         if cmd == "send":
                             filepath = input("Enter firmware file path: ").strip()
-                            send_ota_sequence(ser_esp32, filepath)
+                            send_ota_sequence(ser_esp32, ser_stm32, filepath)
                         else:
                             ser_esp32.write((cmd + '\n').encode())
                     except KeyboardInterrupt:
